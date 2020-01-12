@@ -2,7 +2,7 @@
 // @name         Factorio Zone Token
 // @version      0.1
 // @description  Set user token on factorio.zone
-// @author       You
+// @author       Rubydesic
 // @match        https://factorio.zone/
 // @grant        none
 // ==/UserScript==
