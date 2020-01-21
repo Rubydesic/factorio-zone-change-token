@@ -12,6 +12,9 @@
     var header = document.querySelector("section.control-container.flex-row");
     header.innerHTML += `<div class="control-item"><button class="pure-button" onclick="promptForToken()">Change Token</button></div>`;
 
+    var startButton = document.querySelector("#start-button");
+    startButton.removeAttribute("disabled");
+    
     window.promptForToken = function() {
         var token = prompt("What do you want to set your token to? (type reset for new token)", localStorage.getItem("userToken"));
 
