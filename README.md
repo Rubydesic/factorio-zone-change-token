@@ -1,5 +1,5 @@
 # Change Your Factorio Zone Token
-A simple userscript that allows you to change your token on factorio.zone.
+A simple userscript that allows you to change your token on factorio.zone or valheim.zone.
 
 ## Install
 
@@ -9,5 +9,5 @@ A simple userscript that allows you to change your token on factorio.zone.
 
 ## Use
 
-1. Go to [factorio.zone](https://factorio.zone)
+1. Go to [factorio.zone](https://factorio.zone) or [valheim.zone](https://valheim.zone)
 2. Press "Change Token"
