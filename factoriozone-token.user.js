@@ -18,10 +18,14 @@
     function makeCollapseButton(el, desc, id) {
         const button = document.createElement('button')
         button.classList.add('collapse-control', 'pure-button')
-        button.innerText = 'Hide' + desc
         if (localStorage.getItem(COLLAPSE_HISTORY_KEY + id) === 'hidden') {
             el.classList.add('hidden')
             el.classList.remove('active')
+            button.innerText = 'Show' + desc
+        } else {
+            el.classList.add('active')
+            el.classList.remove('hidden')
+            button.innerText = 'Hide' + desc
         }
         button.addEventListener('click', () => {
             const cl = el.classList
