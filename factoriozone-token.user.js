@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Factorio Zone Token
-// @version      0.4
+// @version      0.4.1
 // @description  Set user token on factorio.zone
 // @author       Rubydesic
 // @match        https://factorio.zone/
 // @match        https://valheim.zone/
+// @match        https://satisfactory.zone/
 // @grant        none
 // @require      https://cdn.jsdelivr.net/npm/sweetalert2@10
 // @downloadURL  https://raw.githubusercontent.com/Rubydesic/factorio-zone-change-token/master/factoriozone-token.user.js
