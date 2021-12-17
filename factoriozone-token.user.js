@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Factorio Zone Token
-// @version      0.4.1
+// @version      0.5.0
 // @description  Set user token on factorio.zone
 // @author       Rubydesic
 // @match        https://factorio.zone/
@@ -15,6 +15,15 @@
     const USER_TOKEN_KEY = 'userToken'
     const TOKEN_HISTORY_KEY = '_rubydesicTokenHistory'
     const COLLAPSE_HISTORY_KEY = '_rubydesicCollapseHistory-'
+    const SLOT_NAMES_KEY = '_rubydesicSaveNames'
+
+    function setLS(key, value) {
+        localStorage.setItem(SLOT_NAMES_KEY, JSON.stringify(value))
+    }
+
+    function getLS(key) {
+        return JSON.parse(localStorage.getItem(SLOT_NAMES_KEY) ?? 'null')
+    }
 
     function makeCollapseButton(el, desc, id) {
         const button = document.createElement('button')
@@ -76,6 +85,17 @@
         .collapse.visible {
             display: block;
         }
+        #saves {
+            width: 100% !important;
+            min-width: 160px;
+        }
+        .control-link {
+            padding: 0;
+        }
+        .control-link a {
+            padding-left: 2px;
+            padding-right: 2px;
+        }
     `
     document.head.appendChild(node)
 
@@ -94,11 +114,68 @@
     const tokenCollapse = makeCollapseButton(document.querySelector('.token-control > p'), '', 'token')
     document.querySelector('.token-control').insertAdjacentElement('beforeend', tokenCollapse)
 
+    const saves = document.getElementById('saves')
+
+    function updateOption(option) {
+        const saveNames = getLS(SLOT_NAMES_KEY) ?? {}
+        const name = saveNames[option.value]
+        if (name) {
+            option.innerText = option.innerText.replace(/.+(?= \(.+\))/, name)
+        }
+    }
+
+    let updating = false
+    new MutationObserver(() => {
+        if (updating)
+            return
+        updating = true
+        for (const option of saves.options) {
+            updateOption(option)
+        }
+        updating = false
+    }).observe(saves, { childList: true })
+
+
+    const rename = document.createElement('a')
+    rename.innerText = '[rename]'
+    rename.setAttribute('href', 'javascript:void(0)')
+    rename.addEventListener('click', async () => {
+        const current = saves.options[saves.selectedIndex]
+        const saveNames = getLS(SLOT_NAMES_KEY) ?? {}
+        /** @type {string} */
+        const result = (await Swal.fire({
+            input: 'text',
+            inputValue: saveNames[current.value] ?? '',
+            title: 'Set ' + current.value + ' name',
+            text: 'Type reset to go back to original'
+        })).value
+
+        if (result === '' || result.includes('(') || result.includes(')')) {
+            return
+        }
+
+        if (result.toLowerCase() === 'reset') {
+            delete saveNames[current.value]
+            setLS(SLOT_NAMES_KEY, saveNames)
+            location.reload()
+        } else {
+            saveNames[current.value] = result
+            setLS(SLOT_NAMES_KEY, saveNames)
+            updateOption(current)
+        }
+    })
+
+    const div = document.createElement('div')
+    div.classList.add('control-link')
+    div.appendChild(rename)
+
+    document.getElementById('upload-link').parentElement.parentElement.append(div)
+
     document.getElementById('tokenHistory').onclick = async () => {
         const history = JSON.parse(localStorage.getItem(TOKEN_HISTORY_KEY))
 
         if (history === null) {
-            await Swal.fire({ title: 'No history!' })
+            await Swal.fire({title: 'No history!'})
         } else {
             const tableRows = history
                 .map(e => `
