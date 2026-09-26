@@ -253,7 +253,7 @@
         `
         // Constructed stylesheets do not require an inline <style> element.
         // Keep the site's CSP intact; never alter its policy or add remote CSS.
-        if (typeof CSSStyleSheet.prototype.replaceSync === 'function') {
+        if ('adoptedStyleSheets' in document && typeof CSSStyleSheet.prototype.replaceSync === 'function') {
             const sheet = new CSSStyleSheet()
             sheet.replaceSync(css)
             document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
