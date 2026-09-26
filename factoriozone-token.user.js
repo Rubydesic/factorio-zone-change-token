@@ -57,7 +57,7 @@
                     resolve(node)
                 }
             })
-            observer.observe(document.documentElement, {childList: true, subtree: true})
+            observer.observe(document, {childList: true, subtree: true})
         })
     }
 

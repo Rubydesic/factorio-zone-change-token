@@ -29,7 +29,14 @@ async function run() {
             }, original)
             assert.match(error, /classList/)
         })
-        await before.reload(); await ready(before)
+        await before.reload()
+        await before.locator('section.control-container').waitFor()
+        await check('Recover an existing empty-token session using the new controls', async () => {
+            await before.addScriptTag({content:script})
+            await before.getByRole('button',{name:'New token',exact:true}).click()
+            await Promise.all([before.waitForEvent('load'),before.getByRole('button',{name:'Create new token',exact:true}).click()])
+            await ready(before)
+        })
         await check('Reproduce original missing-control crash on real page DOM', async () => {
             const error = await before.evaluate(source => {
                 const controls = document.querySelector('section.control-container')
