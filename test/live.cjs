@@ -61,6 +61,8 @@ async function run() {
         await check('Initialize before site rendering and keep token hidden', async () => {
             assert.equal(await page.locator('#fzt-toolbar code').isVisible(), false)
             assert.equal(await page.locator('#fzt-toolbar').count(), 1)
+            assert.equal(await page.locator('#fzt-toolbar').evaluate(node => getComputedStyle(node).display), 'flex')
+            assert.equal(await page.locator('#fzt-toolbar').evaluate(node => getComputedStyle(node).gap), '8px')
         })
         await check('Blank token has inline validation and Cancel leaves identity unchanged', async () => {
             await page.getByRole('button',{name:'Change token',exact:true}).click()
@@ -108,6 +110,7 @@ async function run() {
             await page.getByRole('button',{name:'Change token',exact:true}).click()
             await page.screenshot({path:path.join(artifacts,'mobile-dialog.png'),fullPage:true})
             assert.ok(await page.locator('dialog').evaluate(node=>node.getBoundingClientRect().right <= innerWidth))
+            assert.equal(await page.locator('dialog').evaluate(node=>getComputedStyle(node).padding), '20px')
             await page.keyboard.press('Escape')
         })
         assert.deepEqual(errors, [], 'Unexpected browser JavaScript errors')

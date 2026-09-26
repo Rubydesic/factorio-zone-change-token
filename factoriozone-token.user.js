@@ -228,8 +228,7 @@
     async function initialize() {
         const controls = await waitFor('section.control-container')
         if (document.getElementById('fzt-toolbar')) return
-        const style = element('style')
-        style.textContent = `
+        const css = `
             #fzt-toolbar {display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;background:#e7e7e7;border-bottom:1px solid #bbb;font:inherit;color:#222}
             #fzt-toolbar .fzt-label {font-weight:bold;margin-right:4px}
             #fzt-toolbar code {overflow-wrap:anywhere;max-width:100%}
@@ -252,7 +251,16 @@
             #fzt-toolbar button:focus-visible,.fzt-dialog button:focus-visible,.fzt-link:focus-visible {outline:2px solid #0078e7;outline-offset:2px}
             @media(max-width:480px) {.fzt-history-row {flex-wrap:wrap}.fzt-history-row>div {flex-basis:100%}}
         `
-        document.head.append(style)
+        // Constructed stylesheets do not require an inline <style> element.
+        // Keep the site's CSP intact; never alter its policy or add remote CSS.
+        if (typeof CSSStyleSheet.prototype.replaceSync === 'function') {
+            const sheet = new CSSStyleSheet()
+            sheet.replaceSync(css)
+            document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
+        } else {
+            const style = element('style', css)
+            document.head.append(style)
+        }
         const toolbar = element('div')
         toolbar.id = 'fzt-toolbar'
         toolbar.setAttribute('role', 'region')
