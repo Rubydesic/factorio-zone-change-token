@@ -32,7 +32,9 @@ async function run() {
         await before.reload()
         await before.locator('section.control-container').waitFor()
         await check('Recover an existing empty-token session using the new controls', async () => {
-            await before.addScriptTag({content:script})
+            // Execute as automation-provided userscript code, not a site script tag.
+            // Keep the site's CSP enabled (no bypassCSP browser option).
+            await before.evaluate(source => (0, eval)(source), script)
             await before.getByRole('button',{name:'New token',exact:true}).click()
             await Promise.all([before.waitForEvent('load'),before.getByRole('button',{name:'Create new token',exact:true}).click()])
             await ready(before)
