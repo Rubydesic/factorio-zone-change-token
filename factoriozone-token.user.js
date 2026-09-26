@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Factorio Zone Token
-// @version      0.6.0
-// @description  Manage tokens and save names on Factorio Zone
+// @version      0.7.1
+// @description  Save, name, and switch tokens on factorio.zone
 // @author       Rubydesic
 // @match        https://factorio.zone/
 // @match        https://valheim.zone/
@@ -13,296 +13,387 @@
 (function () {
     'use strict'
     const TOKEN = 'userToken'
+    const SAVED = '_rubydesicTokens'
     const HISTORY = '_rubydesicTokenHistory'
-    const NAMES = '_rubydesicSaveNames'
-    const COLLAPSE = '_rubydesicCollapseHistory-'
+    const PENDING = '_rubydesicPendingTokenName'
+    const SAVE_NAMES = '_rubydesicSaveNames'
+    let select, status, reload, active = '', externalChange = false
 
     function read(key, fallback) {
-        try {
-            const value = JSON.parse(localStorage.getItem(key))
-            return value ?? fallback
-        } catch {
-            return fallback
-        }
+        try { return JSON.parse(localStorage.getItem(key)) ?? fallback }
+        catch { return fallback }
     }
-    function names() {
-        const value = read(NAMES, {})
-        return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+    function current() { return localStorage.getItem(TOKEN) || '' }
+    function write(key, value) { localStorage.setItem(key, JSON.stringify(value)) }
+    function node(tag, text, className) {
+        const result = document.createElement(tag)
+        if (text !== undefined) result.textContent = text
+        if (className) result.className = className
+        return result
     }
-    function history() {
-        const value = read(HISTORY, [])
-        return Array.isArray(value) ? value.filter(entry => entry &&
-            typeof entry.token === 'string' && entry.token.trim()) : []
+    function button(text, action, className = 'pure-button', fail = report) {
+        const result = node('button', text, className)
+        result.type = 'button'
+        result.addEventListener('click', async () => {
+            try { await action() } catch { fail('Could not save changes. Check browser storage and try again.') }
+        })
+        return result
     }
-    function element(tag, text, className) {
-        const node = document.createElement(tag)
-        if (text !== undefined) node.textContent = text
-        if (className) node.className = className
-        return node
-    }
-    function button(text, action, className = 'pure-button') {
-        const node = element('button', text, className)
-        node.type = 'button'
-        node.addEventListener('click', action)
-        return node
-    }
+    function report(message) { if (status) status.textContent = message }
     function waitFor(selector) {
         return new Promise(resolve => {
             const existing = document.querySelector(selector)
             if (existing) return resolve(existing)
             const observer = new MutationObserver(() => {
-                const node = document.querySelector(selector)
-                if (node) {
-                    observer.disconnect()
-                    resolve(node)
-                }
+                const found = document.querySelector(selector)
+                if (found) { observer.disconnect(); resolve(found) }
             })
             observer.observe(document, {childList: true, subtree: true})
         })
     }
-
-    // A native dialog supplies focus containment, Escape, and modal semantics.
-    function dialog(title, description) {
-        const previousFocus = document.activeElement
-        const node = element('dialog', undefined, 'fzt-dialog')
-        const heading = element('h2', title)
-        heading.id = 'fzt-dialog-title'
-        const help = element('p', description, 'fzt-help')
-        help.id = 'fzt-dialog-help'
-        node.setAttribute('aria-labelledby', heading.id)
-        node.setAttribute('aria-describedby', help.id)
-        const form = element('form')
-        const content = element('div')
-        const error = element('p', '', 'fzt-error')
-        error.setAttribute('role', 'alert')
-        const actions = element('div', undefined, 'fzt-actions')
-        const close = () => node.close()
-        const cancel = button('Cancel', close)
-        actions.append(cancel)
-        form.append(heading, help, content, error, actions)
-        node.append(form)
-        form.addEventListener('submit', event => event.preventDefault())
-        node.addEventListener('close', () => {
-            node.remove()
-            if (previousFocus && previousFocus.isConnected) previousFocus.focus()
-        }, {once: true})
-        document.body.append(node)
-        return {node, form, content, actions, cancel, close,
-            show: () => node.showModal(),
-            fail: message => {error.textContent = message}}
-    }
-    function inputField(modal, label, value) {
-        const id = 'fzt-dialog-input'
-        const caption = element('label', label)
-        caption.htmlFor = id
-        const input = element('input')
-        input.id = id
-        input.type = 'text'
-        input.value = value || ''
-        input.autocomplete = 'off'
-        input.spellcheck = false
-        input.autofocus = true
-        modal.content.append(caption, input)
-        return input
-    }
-    function submitButton(modal, text, action) {
-        const save = element('button', text, 'pure-button pure-button-primary')
-        save.type = 'submit'
-        modal.actions.append(save)
-        modal.form.addEventListener('submit', event => {
-            event.preventDefault()
-            try { action() } catch {
-                modal.fail('Could not save your changes. Check that browser storage is enabled and try again.')
-            }
-        })
-    }
-    function changeToken(next) {
-        const original = localStorage.getItem(TOKEN)
-        if (next === original) return
-        if (original && original.trim()) {
-            const entries = history()
-            entries.unshift({token: original, dateInvalidated: new Date().toISOString()})
-            localStorage.setItem(HISTORY, JSON.stringify(entries))
+    function tokens() {
+        const saved = read(SAVED, null)
+        // Once a catalog exists, history is not imported again. Removed entries stay removed.
+        const source = Array.isArray(saved) ? saved : read(HISTORY, [])
+        const result = [], seen = new Set()
+        for (const entry of Array.isArray(source) ? source : []) {
+            if (!entry || typeof entry.token !== 'string' || !entry.token.trim() || seen.has(entry.token)) continue
+            seen.add(entry.token)
+            result.push({token: entry.token, name: typeof entry.name === 'string' ? entry.name : ''})
         }
-        if (next === null) localStorage.removeItem(TOKEN)
-        else localStorage.setItem(TOKEN, next)
+        for (const token of [active, current()]) {
+            if (token.trim() && !seen.has(token)) { result.push({token, name: ''}); seen.add(token) }
+        }
+        return result
+    }
+    function short(token) { return token.length > 20 ? token.slice(0, 8) + '…' + token.slice(-8) : token }
+    function fillSelect(target, entries, selected, markCurrent = false) {
+        target.replaceChildren()
+        for (const entry of entries) {
+            const duplicateName = entry.name && entries.some(other => other.token !== entry.token && other.name.toLowerCase() === entry.name.toLowerCase())
+            const duplicateShort = entries.some(other => other.token !== entry.token && short(other.token) === short(entry.token))
+            const value = duplicateShort ? entry.token : short(entry.token)
+            const label = entry.name ? entry.name + (duplicateName ? ' · ' + value : '') : value
+            const suffix = !markCurrent ? '' : entry.token === active ? ' (current)' : entry.token === current() ? ' (other tab)' : ''
+            const option = node('option', label + suffix)
+            option.value = entry.token
+            option.title = entry.token
+            target.append(option)
+        }
+        if (!entries.length || !entries.some(entry => entry.token === selected)) {
+            const placeholder = node('option', 'No token yet')
+            placeholder.value = ''
+            placeholder.disabled = true
+            target.prepend(placeholder)
+        }
+        target.value = entries.some(entry => entry.token === selected) ? selected : ''
+    }
+    function refresh() {
+        const entries = tokens()
+        fillSelect(select, entries, active)
+        select.disabled = entries.length === 0
+    }
+    function rememberCurrent() {
+        const entries = tokens()
+        write(SAVED, entries)
+        const previous = active || current()
+        if (previous.trim()) {
+            const old = read(HISTORY, [])
+            const seen = new Set([previous])
+            const history = (Array.isArray(old) ? old : []).filter(entry => {
+                if (!entry || typeof entry.token !== 'string' || !entry.token.trim() || seen.has(entry.token)) return false
+                seen.add(entry.token)
+                return true
+            })
+            history.unshift({token: previous, dateInvalidated: new Date().toISOString()})
+            write(HISTORY, history)
+        }
+        return entries
+    }
+    function switchTo(token, name) {
+        if (!token.trim()) return
+        if (token === active && token === current() && name === undefined) return
+        const entries = token === active && token === current() ? tokens() : rememberCurrent()
+        const existing = entries.find(entry => entry.token === token)
+        if (!existing) entries.push({token, name: name || ''})
+        else if (name) existing.name = name
+        write(SAVED, entries)
+        sessionStorage.removeItem(PENDING)
+        if (token === active && token === current()) { refresh(); return }
+        // Do not change identity unless saving both the old and new entries succeeded.
+        localStorage.setItem(TOKEN, token)
         location.reload()
     }
-    function editToken(initial = '') {
-        const modal = dialog('Change token',
-            'Paste a token to return to another server. Your current token will be kept in history on this browser. The page will reload.')
-        const input = inputField(modal, 'Server token', initial)
-        submitButton(modal, 'Use token', () => {
-            const value = input.value.trim()
-            if (!value) {
-                modal.fail('Enter a token, or choose Cancel to keep your current server.')
-                input.focus()
-                return
-            }
-            if (value.toLowerCase() === 'reset') {
-                modal.fail('To create a new token, use New token in the toolbar.')
-                return
-            }
-            changeToken(value)
-            modal.close()
-        })
-        modal.show()
+    function newToken(name) {
+        const entries = rememberCurrent()
+        sessionStorage.setItem(PENDING, JSON.stringify({name, known: entries.map(entry => entry.token)}))
+        try { localStorage.removeItem(TOKEN) }
+        catch (error) { sessionStorage.removeItem(PENDING); throw error }
+        location.reload()
     }
-    function resetToken() {
-        const modal = dialog('Create a new token?',
-            'This switches to a fresh server identity and reloads the page. Your current token will remain in history so you can return. Existing saves are not deleted.')
-        submitButton(modal, 'Create new token', () => {changeToken(null); modal.close()})
-        modal.show()
-    }
-    function showHistory() {
-        const modal = dialog('Token history',
-            'Previous server tokens saved in this browser. Tokens provide access to your servers; keep them private.')
-        modal.cancel.textContent = 'Close'
-        const entries = history()
-        if (!entries.length) modal.content.append(element('p', 'No previous tokens yet. Switching or creating a token will save your current one here.'))
-        else {
-            const list = element('div', undefined, 'fzt-history')
-            for (const entry of entries) {
-                const row = element('div', undefined, 'fzt-history-row')
-                const details = element('div')
-                const date = new Date(entry.dateInvalidated)
-                details.append(element('span', Number.isNaN(date.getTime()) ? 'Date unavailable' : date.toLocaleString(), 'fzt-help'))
-                const code = element('code', 'Token hidden')
-                const reveal = button('Show', () => {
-                    const hidden = reveal.getAttribute('aria-expanded') !== 'true'
-                    reveal.setAttribute('aria-expanded', String(hidden))
-                    reveal.textContent = hidden ? 'Hide' : 'Show'
-                    code.textContent = hidden ? entry.token : 'Token hidden'
-                })
-                reveal.setAttribute('aria-expanded', 'false')
-                details.append(code)
-                row.append(details, reveal, button('Use token', () => {modal.close(); editToken(entry.token)}))
-                list.append(row)
-            }
-            modal.content.append(list)
+    function captureToken() {
+        if (externalChange) return true
+        const token = current()
+        if (!token.trim()) return false
+        const entries = tokens()
+        let pending
+        try { pending = JSON.parse(sessionStorage.getItem(PENDING)) } catch {}
+        if (pending && typeof pending.name === 'string' && Array.isArray(pending.known) && !pending.known.includes(token)) {
+            entries.find(entry => entry.token === token).name = pending.name
         }
-        modal.show()
+        write(SAVED, entries)
+        sessionStorage.removeItem(PENDING)
+        active = token
+        refresh()
+        return true
     }
-
+    function modal(title) {
+        const open = document.getElementById('fzt-dialog')
+        if (open) return null
+        const previousFocus = document.activeElement
+        const dialog = node('dialog')
+        dialog.id = 'fzt-dialog'
+        const heading = node('h3', title)
+        heading.id = 'fzt-title'
+        dialog.setAttribute('aria-labelledby', heading.id)
+        const form = node('form')
+        const body = node('div')
+        const error = node('p', '', 'fzt-message')
+        error.setAttribute('role', 'status')
+        const actions = node('div', undefined, 'fzt-actions')
+        form.append(heading, body, error, actions)
+        form.addEventListener('submit', event => event.preventDefault())
+        dialog.append(form)
+        dialog.addEventListener('close', () => {
+            dialog.remove()
+            if (previousFocus && previousFocus.isConnected) previousFocus.focus()
+        }, {once: true})
+        document.body.append(dialog)
+        return {dialog, form, body, actions, error,
+            fail: message => {error.textContent = message},
+            close: () => dialog.close(), show: () => dialog.showModal()}
+    }
+    function field(modal, label, id, tag = 'input') {
+        const caption = node('label', label)
+        caption.htmlFor = id
+        const input = node(tag)
+        input.id = id
+        if (tag === 'input') { input.type = 'text'; input.autocomplete = 'off'; input.spellcheck = false }
+        modal.body.append(caption, input)
+        return input
+    }
+    function submit(modal, label, action) {
+        const save = node('button', label, 'pure-button pure-button-primary')
+        save.type = 'submit'
+        modal.actions.append(save)
+        modal.form.addEventListener('submit', () => {
+            try { action() } catch { modal.fail('Could not save changes. Check browser storage and try again.') }
+        })
+    }
+    async function copy(token, feedback, fallback) {
+        if (!token) { feedback('No token yet.'); return }
+        try { await navigator.clipboard.writeText(token); feedback('Copied') }
+        catch { fallback() }
+    }
+    function copyControl(label, getToken, fallback, className = 'pure-button', fail = report) {
+        let timer
+        const control = button(label, () => copy(getToken(), message => {
+            clearTimeout(timer)
+            control.textContent = label.startsWith('[') ? '[' + message.toLowerCase() + ']' : message
+            timer = setTimeout(() => { control.textContent = label }, 1600)
+        }, fallback), className, fail)
+        control.setAttribute('aria-live', 'polite')
+        return control
+    }
+    function addToken() {
+        const m = modal('Add token')
+        if (!m) return
+        const token = field(m, 'Token', 'fzt-add-token')
+        token.autofocus = true
+        const name = field(m, 'Name (optional)', 'fzt-add-name')
+        m.body.append(button('Generate new token', () => newToken(name.value.trim()), 'fzt-link fzt-new', m.fail))
+        m.actions.append(button('Cancel', m.close))
+        submit(m, 'Add & switch', () => {
+            if (!token.value.trim()) { m.fail('Enter a token.'); token.focus(); return }
+            switchTo(token.value.trim(), name.value.trim())
+            m.close()
+        })
+        m.show()
+    }
+    function manageTokens(manualCopy = false) {
+        const m = modal('Manage tokens')
+        if (!m) return
+        const chosen = field(m, 'Token', 'fzt-manage-token', 'select')
+        const name = field(m, 'Name', 'fzt-manage-name')
+        const value = field(m, 'Value', 'fzt-manage-value')
+        value.readOnly = true
+        value.addEventListener('click', () => value.select())
+        let removed
+        const copyButton = copyControl('Copy', () => chosen.value, () => {
+            value.focus(); value.select(); m.fail('Select and copy the token above.')
+        }, 'pure-button', m.fail)
+        const undo = button('Undo', () => {
+            if (!removed) return
+            const entries = tokens()
+            if (!entries.some(entry => entry.token === removed.entry.token)) entries.splice(removed.index, 0, removed.entry)
+            write(SAVED, entries)
+            const restored = removed.entry.token
+            removed = null
+            update(restored)
+            refresh()
+            m.fail('Restored.')
+        }, 'fzt-link', m.fail)
+        undo.hidden = true
+        const remove = button('Remove from list', () => {
+            const entries = tokens(), index = entries.findIndex(entry => entry.token === chosen.value)
+            if (index < 0 || chosen.value === active || chosen.value === current()) return
+            const entry = entries[index]
+            entries.splice(index, 1)
+            write(SAVED, entries)
+            removed = {entry, index}
+            update(active)
+            refresh()
+            m.fail('Removed from list.')
+        }, 'fzt-link', m.fail)
+        const secondary = node('div', undefined, 'fzt-secondary')
+        secondary.append(copyButton, remove, undo)
+        m.body.append(secondary)
+        function update(selected) {
+            const entries = tokens()
+            fillSelect(chosen, entries, selected, true)
+            load()
+        }
+        function load() {
+            const entry = tokens().find(entry => entry.token === chosen.value)
+            name.value = entry ? entry.name : ''
+            value.value = entry ? entry.token : ''
+            name.disabled = value.disabled = copyButton.disabled = !entry
+            remove.disabled = !entry || entry.token === active || entry.token === current()
+            remove.hidden = remove.disabled
+            remove.title = !entry ? '' : entry.token === active ? 'The current token stays in the list.' :
+                entry.token === current() ? 'This token is selected in another tab.' : ''
+            undo.hidden = !removed
+        }
+        chosen.addEventListener('change', () => {load(); m.fail('')})
+        m.actions.append(button('Close', m.close))
+        submit(m, 'Save name', () => {
+            const entries = tokens(), entry = entries.find(entry => entry.token === chosen.value)
+            if (!entry) { update(active); m.fail('This token was removed in another tab.'); return }
+            entry.name = name.value.trim()
+            write(SAVED, entries)
+            refresh()
+            update(entry.token)
+            m.fail('Saved.')
+        })
+        update(active)
+        m.show()
+        if (manualCopy) { value.focus(); value.select(); m.fail('Select and copy the token above.') }
+    }
     async function initializeSaves() {
         const saves = await waitFor('#saves')
-        function updateOptions() {
+        const names = () => {
+            const value = read(SAVE_NAMES, {})
+            return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+        }
+        function update() {
             const saved = names()
             for (const option of saves.options) {
                 const name = saved[option.value]
                 if (typeof name !== 'string' || !name) continue
                 const text = option.textContent.replace(/.+(?= \(.+\))/, () => name)
-                // MutationObserver callbacks are asynchronous; avoid writing identical text.
                 if (option.textContent !== text) option.textContent = text
             }
         }
-        updateOptions()
-        new MutationObserver(updateOptions).observe(saves, {childList: true, subtree: true, characterData: true})
+        update()
+        new MutationObserver(update).observe(saves, {childList: true, subtree: true, characterData: true})
         const rename = button('[rename]', () => {
-            const current = saves.options[saves.selectedIndex]
-            if (!current) return
-            const modal = dialog('Rename save slot', 'Give this slot a name on this browser. Leave the name empty to restore its original label.')
-            const input = inputField(modal, 'Slot name', names()[current.value])
-            submitButton(modal, 'Save name', () => {
-                const value = input.value.trim()
-                if (/[()]/.test(value)) {
-                    modal.fail('Use a name without parentheses; those show the save status.')
-                    input.focus()
-                    return
-                }
-                const saved = names()
-                if (value) saved[current.value] = value
-                else delete saved[current.value]
-                localStorage.setItem(NAMES, JSON.stringify(saved))
-                if (!value) location.reload()
-                else updateOptions()
-                modal.close()
-            })
-            modal.show()
+            const option = saves.options[saves.selectedIndex]
+            if (!option) return
+            const saved = names()
+            const input = prompt('Slot name (or reset):', saved[option.value] || '')
+            if (input === null || !input.trim()) return
+            const name = input.trim()
+            if (/[()]/.test(name)) { report('Slot names cannot contain parentheses.'); return }
+            if (name.toLowerCase() === 'reset') delete saved[option.value]
+            else saved[option.value] = name
+            write(SAVE_NAMES, saved)
+            if (name.toLowerCase() === 'reset') location.reload()
+            else update()
         }, 'fzt-link')
         rename.id = 'fzt-rename'
         const upload = await waitFor('#upload-link')
         upload.parentElement.append(rename)
     }
-
     async function initialize() {
         const controls = await waitFor('section.control-container')
-        if (document.getElementById('fzt-toolbar')) return
+        if (document.getElementById('fzt-control')) return
         const css = `
-            #fzt-toolbar {display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;background:#e7e7e7;border-bottom:1px solid #bbb;font:inherit;color:#222}
-            #fzt-toolbar .fzt-label {font-weight:bold;margin-right:4px}
-            #fzt-toolbar code {overflow-wrap:anywhere;max-width:100%}
-            #fzt-toolbar .fzt-status {font-size:12px;color:#555}
-            .fzt-link {border:0;padding:0 0 0 6px;background:none;color:#00e;cursor:pointer;font:inherit;font-size:12px}
+            #fzt-control {max-width:100%;min-width:210px}
+            #fzt-select {box-sizing:border-box;width:100%;max-width:300px;min-width:210px}
+            .fzt-link {border:0;background:none;padding:0 0 0 6px;color:#00e;font:inherit;font-size:12px;cursor:pointer}
             .fzt-link:hover {text-decoration:underline}
-            .fzt-dialog {box-sizing:border-box;width:min(560px,calc(100% - 32px));max-height:85vh;overflow:auto;border:1px solid #999;border-radius:4px;padding:20px;background:#fff;color:#222;font:14px Arial,sans-serif;box-shadow:0 8px 32px #0004}
-            .fzt-dialog::backdrop {background:#0006}
-            .fzt-dialog h2 {font-size:20px;margin:0 0 12px}
-            .fzt-help {color:#555;line-height:1.5;margin:0 0 16px}
-            .fzt-dialog label {display:block;font-weight:bold;margin-bottom:6px}
-            .fzt-dialog input {box-sizing:border-box;width:100%;padding:9px;border:1px solid #999;border-radius:2px;font:inherit}
-            .fzt-actions {display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:20px}
-            .fzt-error {color:#a31818;line-height:1.4}
-            .fzt-error:empty {display:none}
-            .fzt-history-row {display:flex;align-items:center;gap:8px;padding:12px 0;border-bottom:1px solid #ddd}
-            .fzt-history-row>div {flex:1;min-width:0}
-            .fzt-history-row code,.fzt-history-row span {display:block;overflow-wrap:anywhere}
-            .fzt-history-row span {font-size:12px;margin-bottom:4px}
-            #fzt-toolbar button:focus-visible,.fzt-dialog button:focus-visible,.fzt-link:focus-visible {outline:2px solid #0078e7;outline-offset:2px}
-            @media(max-width:480px) {.fzt-history-row {flex-wrap:wrap}.fzt-history-row>div {flex-basis:100%}}
+            .fzt-link:disabled {color:#666;cursor:default;text-decoration:none}
+            #fzt-status {font-size:12px;margin-top:4px;max-width:300px}
+            #fzt-status:empty,.fzt-message:empty {display:none}
+            #fzt-dialog {box-sizing:border-box;width:360px;max-width:calc(100% - 32px);max-height:85vh;overflow:auto;border:1px solid #999;border-radius:3px;padding:16px;font:14px Arial,sans-serif;background:white;color:#222}
+            #fzt-dialog::backdrop {background:#0005}
+            #fzt-dialog h3 {margin:0 0 14px;font-size:18px}
+            #fzt-dialog label {display:block;margin:12px 0 4px}
+            #fzt-dialog input,#fzt-dialog select {box-sizing:border-box;width:100%;min-width:0;padding:6px;font:inherit}
+            #fzt-dialog input[readonly] {font-family:monospace}
+            .fzt-actions,.fzt-secondary {display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px}
+            .fzt-actions {justify-content:flex-end}
+            .fzt-new {padding:0;margin-top:12px}
+            .fzt-message {margin:12px 0 0;line-height:1.4}
+            #fzt-control button:focus-visible,#fzt-dialog button:focus-visible {outline:2px solid #0078e7;outline-offset:2px}
         `
-        // Constructed stylesheets do not require an inline <style> element.
-        // Keep the site's CSP intact; never alter its policy or add remote CSS.
+        // Constructed stylesheets work with the site's CSP; do not relax its policy.
         if ('adoptedStyleSheets' in document && typeof CSSStyleSheet.prototype.replaceSync === 'function') {
             const sheet = new CSSStyleSheet()
             sheet.replaceSync(css)
             document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
-        } else {
-            const style = element('style', css)
-            document.head.append(style)
-        }
-        const toolbar = element('div')
-        toolbar.id = 'fzt-toolbar'
-        toolbar.setAttribute('role', 'region')
-        toolbar.setAttribute('aria-label', 'Server token controls')
-        toolbar.append(element('span', 'Server token', 'fzt-label'))
-        const code = element('code', 'Hidden')
-        code.hidden = true
-        const show = button('Show token', () => {
-            code.hidden = !code.hidden
-            code.textContent = code.hidden ? '' : (localStorage.getItem(TOKEN) || 'No token yet')
-            show.textContent = code.hidden ? 'Show token' : 'Hide token'
-            show.setAttribute('aria-expanded', String(!code.hidden))
+        } else document.head.append(node('style', css))
+        const control = node('div', undefined, 'control-item')
+        control.id = 'fzt-control'
+        const header = node('div', undefined, 'control-label')
+        const label = node('label', 'Token')
+        label.htmlFor = 'fzt-select'
+        header.append(label, button('[add]', addToken, 'fzt-link'), button('[manage]', () => manageTokens(), 'fzt-link'),
+            copyControl('[copy]', () => active, () => manageTokens(true), 'fzt-link'))
+        select = node('select')
+        select.id = 'fzt-select'
+        select.title = 'Choose a token to switch'
+        select.addEventListener('change', () => {
+            try { switchTo(select.value) }
+            catch { refresh(); report('Could not switch. Check browser storage and try again.') }
         })
-        show.setAttribute('aria-expanded', 'false')
-        const copy = button('Copy token', async () => {
-            try {
-                const value = localStorage.getItem(TOKEN)
-                if (!value) {status.textContent = 'No token yet. Wait for the site to connect.'; return}
-                await navigator.clipboard.writeText(value)
-                status.textContent = 'Token copied.'
-            } catch {status.textContent = 'Copy unavailable. Choose Show token to copy it manually.'}
-        })
-        const change = button('Change token', () => editToken())
-        change.id = 'changeToken'
-        const past = button('History', showHistory)
-        past.id = 'tokenHistory'
-        const status = element('span', '', 'fzt-status')
+        status = node('span')
+        status.id = 'fzt-status'
         status.setAttribute('role', 'status')
-        toolbar.append(show, copy, change, past, button('New token', resetToken), code, status)
-        const info = document.querySelector('section.info')
-        if (info) {
-            info.hidden = localStorage.getItem(COLLAPSE + 'info') === 'hidden'
-            const toggle = button(info.hidden ? 'Show help' : 'Hide help', () => {
-                info.hidden = !info.hidden
-                toggle.textContent = info.hidden ? 'Show help' : 'Hide help'
-                toggle.setAttribute('aria-expanded', String(!info.hidden))
-                try {localStorage.setItem(COLLAPSE + 'info', info.hidden ? 'hidden' : 'visible')} catch {}
-            })
-            toggle.setAttribute('aria-expanded', String(!info.hidden))
-            toolbar.append(toggle)
+        reload = button('Reload', () => location.reload(), 'fzt-link')
+        reload.hidden = true
+        control.append(header, select, status, reload)
+        controls.prepend(control)
+        active = current()
+        refresh()
+        try { write(SAVED, tokens()) } catch { report('Could not save the token list. Check browser storage.') }
+        // The website can issue the first token after its controls have rendered.
+        const capture = () => {
+            try { return captureToken() }
+            catch { report('Could not save the token list. Check browser storage.'); return true }
         }
-        controls.before(toolbar)
+        if (!capture()) {
+            const timer = setInterval(() => { if (capture()) clearInterval(timer) }, 500)
+            window.addEventListener('pagehide', () => clearInterval(timer), {once: true})
+        }
+        window.addEventListener('storage', event => {
+            if (event.key === TOKEN && current() !== active) {
+                externalChange = true
+                try { sessionStorage.removeItem(PENDING) } catch {}
+                report('Token changed in another tab.')
+                reload.hidden = false
+            } else if (event.key === SAVED) refresh()
+        })
         initializeSaves().catch(error => console.error('Factorio Zone Token: save controls failed', error))
     }
     initialize().catch(error => console.error('Factorio Zone Token failed', error))
